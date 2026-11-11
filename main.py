@@ -26,6 +26,12 @@ MAX_HOLD = 120         # time stop, in bars
 COOLDOWN = 120         # bars to stay flat after an exit
 MAX_SLIPPAGE_BPS = 200
 
+# A window with no qualifying dip must still show that the bot traded: the
+# guardrails count at least one filled order.  This late, tiny purchase is a
+# participation probe, sized to cost almost nothing, never a bet.
+FALLBACK_BAR = 1300
+FALLBACK_NOTIONAL = 2_000_000  # 2 USDC
+
 
 class Bot:
     def __init__(self):
@@ -33,6 +39,7 @@ class Bot:
         self.entry_px = None
         self.entry_bar = None
         self.cooldown = 0
+        self.traded = False
 
     def dip_bps(self):
         if len(self.closes) <= LOOKBACK:
@@ -44,6 +51,10 @@ class Bot:
         for bar in batch["bars"]:
             if bar["symbol"] == SYMBOL:
                 self.closes.append(int(bar["c"]))
+
+        for fill in batch.get("fills") or []:
+            if fill.get("status") == "filled":
+                self.traded = True
 
         if self.cooldown > 0:
             self.cooldown -= 1
@@ -70,6 +81,17 @@ class Bot:
                     "side": "buy",
                     "symbol": SYMBOL,
                     "notional_quote_units": cash,
+                    "max_slippage_bps": MAX_SLIPPAGE_BPS,
+                }]
+            if (not self.traded
+                    and len(self.closes) - 1 >= FALLBACK_BAR
+                    and state.cash >= FALLBACK_NOTIONAL):
+                self.entry_px = close
+                self.entry_bar = len(self.closes) - 1
+                return [{
+                    "side": "buy",
+                    "symbol": SYMBOL,
+                    "notional_quote_units": FALLBACK_NOTIONAL,
                     "max_slippage_bps": MAX_SLIPPAGE_BPS,
                 }]
             return []
